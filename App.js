@@ -41,22 +41,42 @@ export default class App extends PureComponent<Props> {
 
   async componentDidMount() {
     try {
+      console.log('Initializing Wi-Fi P2P...');
       await initialize();
-      // since it's required in Android >= 6.0
-      const granted = await PermissionsAndroid.request(
-        PermissionsAndroid.PERMISSIONS.ACCESS_COARSE_LOCATION,
-        {
-          title: 'Access to wi-fi P2P mode',
-          message: 'ACCESS_COARSE_LOCATION',
-        },
-      );
+      
+      // Request necessary permissions for Android
+      try {
+        // Location permission is required in Android >= 6.0 for Wi-Fi P2P
+        const locationGranted = await PermissionsAndroid.request(
+          PermissionsAndroid.PERMISSIONS.ACCESS_COARSE_LOCATION,
+          {
+            title: 'Access to Wi-Fi P2P mode',
+            message: 'Location permission is required for Wi-Fi P2P functionality',
+            buttonPositive: 'OK',
+          },
+        );
+        
+        // Fine location might be needed on newer Android versions
+        const fineLocationGranted = await PermissionsAndroid.request(
+          PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
+          {
+            title: 'Fine Location for Wi-Fi P2P',
+            message: 'Precise location may be needed for better device discovery',
+            buttonPositive: 'OK',
+          },
+        );
+        
+        console.log(
+          locationGranted === PermissionsAndroid.RESULTS.GRANTED
+            ? 'You can use the p2p mode'
+            : 'Permission denied: p2p mode will not work',
+        );
+      } catch (permissionError) {
+        console.log('Permission request failed:', permissionError);
+      }
 
-      console.log(
-        granted === PermissionsAndroid.RESULTS.GRANTED
-          ? 'You can use the p2p mode'
-          : 'Permission denied: p2p mode will not work',
-      );
-
+      // Set up event subscriptions
+      console.log('Setting up Wi-Fi P2P subscriptions...');
       this.peersUpdatesSubscription = subscribeOnPeersUpdates(
         this.handleNewPeers,
       );
@@ -67,10 +87,12 @@ export default class App extends PureComponent<Props> {
         this.handleThisDeviceChanged,
       );
 
+      // Start discovering peers
+      console.log('Starting peer discovery...');
       const status = await startDiscoveringPeers();
       console.log('startDiscoveringPeers status: ', status);
     } catch (e) {
-      console.error(e);
+      console.error('Wi-Fi P2P initialization error:', e);
     }
   }
 
@@ -78,6 +100,14 @@ export default class App extends PureComponent<Props> {
     this.peersUpdatesSubscription?.remove();
     this.connectionInfoUpdatesSubscription?.remove();
     this.thisDeviceChangedSubscription?.remove();
+    
+    // Clear discovery interval if it exists
+    if (this.discoveryInterval) {
+      clearInterval(this.discoveryInterval);
+    }
+    
+    // Stop discovering peers when component unmounts
+    stopDiscoveringPeers().catch(err => console.log('Error stopping peer discovery:', err));
   }
 
   handleNewInfo = info => {
@@ -86,7 +116,14 @@ export default class App extends PureComponent<Props> {
 
   handleNewPeers = ({devices}) => {
     console.log('OnPeersUpdated', devices);
-    this.setState({devices: devices});
+    if (devices && devices.length > 0) {
+      console.log('Found devices:', JSON.stringify(devices));
+      // Alert user when devices are found
+      if (this.state.devices.length === 0 && devices.length > 0) {
+        alert(`${devices.length} peer device(s) found! You can now connect.`);
+      }
+    }
+    this.setState({devices: devices || []});
   };
 
   handleThisDeviceChanged = groupInfo => {
@@ -94,10 +131,16 @@ export default class App extends PureComponent<Props> {
   };
 
   connectToFirstDevice = () => {
-    console.log('Connect to: ', this.state.devices[0]);
-    connect(this.state.devices[0].deviceAddress)
-      .then(() => console.log('Successfully connected'))
-      .catch(err => console.error('Something gone wrong. Details: ', err));
+    if (this.state.devices && this.state.devices.length > 0) {
+      console.log('Connect to: ', this.state.devices[0]);
+      connect(this.state.devices[0].deviceAddress)
+        .then(() => console.log('Successfully connected'))
+        .catch(err => console.error('Connection error: ', err));
+    } else {
+      console.log('No devices available to connect to. Please scan for peers first.');
+      // You might want to start discovering peers here automatically
+      this.onStartInvestigate();
+    }
   };
 
   onCancelConnect = () => {
@@ -134,18 +177,34 @@ export default class App extends PureComponent<Props> {
   };
 
   onStartInvestigate = () => {
-    startDiscoveringPeers()
-      .then(status =>
-        console.log(
-          'startDiscoveringPeers',
-          `Status of discovering peers: ${status}`,
-        ),
-      )
-      .catch(err =>
-        console.error(
-          `Something is gone wrong. Maybe your WiFi is disabled? Error details: ${err}`,
-        ),
-      );
+    // Make sure WiFi is enabled first
+    console.log('Starting peer discovery...');
+    
+    // Setup continuous peer discovery
+    // First stop any existing discovery
+    stopDiscoveringPeers()
+      .then(() => {
+        console.log('Stopped previous discovery session');
+        // Start new discovery session
+        return startDiscoveringPeers();
+      })
+      .then(status => {
+        console.log('startDiscoveringPeers', `Status of discovering peers: ${status}`);
+        // Show a message to the user that we're searching for peers
+        alert('Searching for nearby devices. Please ensure both devices:\n\n1. Have Wi-Fi enabled\n2. Have this app open\n3. Are within close proximity\n4. Have pressed "Investigate" button');
+        
+        // Setup recurring discovery attempts for better reliability
+        this.discoveryInterval = setInterval(() => {
+          console.log('Restarting peer discovery (interval)...');
+          startDiscoveringPeers()
+            .then(status => console.log('Recurring discovery status:', status))
+            .catch(err => console.log('Recurring discovery error:', err));
+        }, 10000); // Every 10 seconds
+      })
+      .catch(err => {
+        console.error(`Peer discovery failed. Error details: ${err}`);
+        alert('Failed to discover peers. Please make sure Wi-Fi is enabled and location permissions are granted.');
+      });
   };
 
   onGetAvailableDevices = () => {
