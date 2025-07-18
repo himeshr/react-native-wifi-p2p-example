@@ -3,11 +3,25 @@ import {View, Text, ScrollView} from 'react-native';
 import {styles} from '../styles/styles';
 
 const MessageList = ({messages = []}) => {
+  // Create a ref for the ScrollView
+  const scrollViewRef = React.useRef(null);
+
+  // Scroll to bottom whenever messages change
+  React.useEffect(() => {
+    if (scrollViewRef.current && messages.length > 0) {
+      // Use a timeout to ensure the layout is complete
+      setTimeout(() => {
+        scrollViewRef.current.scrollToEnd({animated: true});
+      }, 100);
+    }
+  }, [messages]);
+
   return (
     <View style={styles.section}>
       <Text style={styles.subtitle}>Messages</Text>
 
       <ScrollView
+        ref={scrollViewRef}
         style={{
           maxHeight: 200,
           minHeight: 100,
@@ -16,7 +30,13 @@ const MessageList = ({messages = []}) => {
           borderRadius: 8,
           padding: 8,
         }}
-        contentContainerStyle={{paddingBottom: 10}}>
+        contentContainerStyle={{paddingBottom: 10}}
+        // Make sure it can scroll
+        showsVerticalScrollIndicator={true}
+        // Always bounce when scrolling ends
+        alwaysBounceVertical={true}
+        // Use unique IDs instead of index for better performance
+        keyExtractor={(item, index) => item.id || `msg-${index}`}>
         {messages.length === 0 ? (
           <Text
             style={{
@@ -30,7 +50,7 @@ const MessageList = ({messages = []}) => {
         ) : (
           messages.map((msg, index) => (
             <View
-              key={index}
+              key={msg.id || index}
               style={[
                 styles.messageContainer,
                 msg.isSent ? styles.sentMessage : styles.receivedMessage,

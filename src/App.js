@@ -279,16 +279,58 @@ class App extends Component {
     });
 
     // Subscribe to connection info updates
-    this.connectionInfoUpdatesSubscription = subscribeOnConnectionInfoUpdates(
-      info => {
-        this.addLog(`Connection info updated: ${JSON.stringify(info)}`);
-        this.setState({connectionInfo: info});
+    this.handleNewInfo = info => {
+      console.log('Connection info updated:', info);
+      this.addLog(`Connection info updated: ${JSON.stringify(info)}`);
 
-        // If we're connected, stop discovery
-        if (info && info.groupFormed) {
-          this.stopDiscovery();
-        }
-      },
+      // Store the updated information
+      this.setState({connectionInfo: info});
+
+      // If connection was just formed, get additional group info and start message reception
+      if (info?.groupFormed) {
+        // CRITICAL FIX: Get group info with retries, especially important for clients
+        // where group info might not be immediately available
+        this.getGroupInfoWithRetry();
+
+        // Force restart the message receiver to ensure a clean connection
+        console.log(
+          'Connection established/updated, forcing message receiver restart',
+        );
+        this.addLog('Force-restarting message receiver');
+
+        // First stop any existing receiver
+        this.stopReceivingMessages();
+
+        // Delay starting the receiver to ensure group info is available first
+        const baseDelay = 1000; // Base delay for connection to stabilize
+        const roleDelay = info.isGroupOwner ? 500 : 2000; // Extra delay for client role
+
+        this.addLog(
+          `Will start receiver in ${baseDelay + roleDelay}ms (${
+            info.isGroupOwner ? 'group owner' : 'client'
+          })`,
+        );
+        setTimeout(() => {
+          this.startReceivingMessages();
+        }, baseDelay + roleDelay);
+
+        // Show status
+        ToastAndroid.show(
+          'Message receiver activation scheduled',
+          ToastAndroid.SHORT,
+        );
+      }
+
+      // If we've disconnected, clean up
+      if (!info || !info.groupFormed) {
+        this.stopReceivingMessages();
+        console.log('Group disbanded or connection lost');
+        this.addLog('Group disbanded or connection lost');
+      }
+    };
+
+    this.connectionInfoUpdatesSubscription = subscribeOnConnectionInfoUpdates(
+      this.handleNewInfo,
     );
   };
 
@@ -379,6 +421,54 @@ class App extends Component {
     } catch (error) {
       this.addLog(`Stop discovery failed: ${error}`);
     }
+  };
+
+  // Get group info with retries - critical for clients where group info
+  // might not be immediately available after connection
+  getGroupInfoWithRetry = async () => {
+    const MAX_RETRIES = 5;
+    const RETRY_DELAY = 1000;
+    let attempt = 0;
+
+    const attemptGetInfo = async () => {
+      attempt++;
+      this.addLog(`Getting group info (attempt ${attempt}/${MAX_RETRIES})`);
+
+      try {
+        // Call the native getGroupInfo function
+        const groupInfo = await getGroupInfo();
+
+        if (groupInfo) {
+          // Update state with the new group info
+          this.setState({groupInfo});
+
+          // Also update device info if we're the owner
+          if (groupInfo && groupInfo.owner) {
+            this.setState({thisDevice: groupInfo.owner});
+          }
+
+          this.addLog(`Successfully got group info on attempt ${attempt}`);
+          return groupInfo;
+        } else {
+          this.addLog(
+            `Group info attempt ${attempt} returned null or undefined`,
+          );
+        }
+      } catch (error) {
+        this.addLog(`Group info attempt ${attempt} failed: ${error}`);
+      }
+
+      if (attempt < MAX_RETRIES) {
+        this.addLog(`Waiting ${RETRY_DELAY}ms before retry...`);
+        await new Promise(resolve => setTimeout(resolve, RETRY_DELAY));
+        return attemptGetInfo();
+      } else {
+        this.addLog('Maximum group info retrieval attempts reached');
+        return null;
+      }
+    };
+
+    return attemptGetInfo();
   };
 
   // Refresh the list of peers
@@ -572,67 +662,81 @@ class App extends Component {
 
   // Send a message to the connected peer
   sendMessageToPeer = async message => {
+    // Get current connection info from state
     const {connectionInfo} = this.state;
 
-    // Debug information
-    console.log('sendMessageToPeer called with:', message);
-    console.log('Current connectionInfo:', connectionInfo);
-
+    // Check if we're connected to a group
     if (!connectionInfo || !connectionInfo.groupFormed) {
-      const errorMsg = 'Cannot send message: Not connected';
+      const errorMsg = 'Cannot send message: Not connected to any device';
       console.warn(errorMsg);
       this.addLog(errorMsg);
       ToastAndroid.show(errorMsg, ToastAndroid.SHORT);
       return;
     }
 
-    // Set sending state to true to block UI
+    // Block UI while sending
     this.setState({isSendingMessage: true});
-    this.addLog('Setting isSendingMessage to true to block UI');
-    console.log('Message sending started - blocking UI');
 
     try {
-      this.addLog(`Sending message: ${message}`);
-      console.log(`Attempting to send message: ${message}`);
+      // Generate a unique ID for this message to identify our own messages
+      const messageId = `${Date.now()}-${Math.floor(Math.random() * 10000)}`;
+      const timestamp = new Date().toLocaleTimeString();
 
-      // Ensure message is a string
-      const messageToSend = String(message);
-      console.log(
-        `Message converted to string, length: ${messageToSend.length}`,
-      );
+      // Create the message with its ID
+      const messageWithId = JSON.stringify({
+        id: messageId,
+        content: message,
+        timestamp: timestamp,
+        sender: connectionInfo.isGroupOwner ? 'groupOwner' : 'client',
+      });
+
+      this.addLog(`Sending message: ${message}`);
+      console.log(`Attempting to send message with ID: ${messageId}`);
+
+      // Store this message ID to ignore it if we receive it back
+      this.sentMessageIds = this.sentMessageIds || [];
+      this.sentMessageIds.push(messageId);
+
+      // Keep only the last 20 sent message IDs
+      if (this.sentMessageIds.length > 20) {
+        this.sentMessageIds = this.sentMessageIds.slice(-20);
+      }
 
       // Using the promise-based approach similar to AppOld1.js
       this.addLog('Sending message via sendMessage');
 
-      // Use the imported sendMessage function with proper promise handling
-      await sendMessage(messageToSend)
-        .then(metaInfo => {
-          console.log('Message sent successfully', metaInfo);
-          this.addLog(`Send operation successful: ${JSON.stringify(metaInfo)}`);
-        })
-        .catch(err => {
-          throw err; // Re-throw to be caught by the outer catch
-        });
+      // Send the message using the appropriate method
+      console.log(
+        `Sending as ${connectionInfo.isGroupOwner ? 'group owner' : 'client'}`,
+      );
+      this.addLog(
+        `Role: ${connectionInfo.isGroupOwner ? 'Group Owner' : 'Client'}`,
+      );
+
+      // Important: According to the library docs, if we're a group owner we need to make sure
+      // our client is ready to receive before sending. We should already have set up
+      // our receiver at connection time, but let's make sure it's set up here as well.
+      if (connectionInfo.isGroupOwner) {
+        // If group owner sending, make sure receiver is ready on our side first
+        this.addLog('Group owner sending - ensuring receiver is ready');
+        if (!this.state.receivingMessages) {
+          // Make sure we're ready to receive replies
+          await this.startReceivingMessages();
+        }
+      } else {
+        // If client sending, add a slight delay to let owner's receiver be ready
+        this.addLog('Client sending - adding delay for owner to be ready');
+        await new Promise(resolve => setTimeout(resolve, 300));
+      }
+
+      // Send the message
+      this.addLog('Executing sendMessage');
+      const metaInfo = await sendMessage(messageWithId);
+      console.log('Message sent successfully', metaInfo);
+      this.addLog(`Send operation successful: ${JSON.stringify(metaInfo)}`);
 
       console.log('sendMessage call completed successfully');
       this.addLog('Network send operation completed');
-
-      // Add to local messages
-      const timestamp = new Date().toLocaleTimeString();
-      this.setState(prevState => ({
-        messages: [
-          ...prevState.messages,
-          {
-            text: message,
-            time: timestamp,
-            isSent: true,
-          },
-        ],
-        isSendingMessage: false, // Unblock UI now that send is complete
-      }));
-
-      console.log('Message added to state successfully and UI unblocked');
-      this.addLog('Message sent successfully and UI unblocked');
       ToastAndroid.show('Message sent', ToastAndroid.SHORT);
     } catch (error) {
       const errorMsg = `Failed to send message: ${error.message || error}`;
@@ -640,8 +744,6 @@ class App extends Component {
       console.log('Error details:', JSON.stringify(error));
       this.addLog(errorMsg);
       ToastAndroid.show(errorMsg, ToastAndroid.LONG);
-
-      // The isSendingMessage will be reset in the finally block
     } finally {
       // Ensure UI is always unblocked even if there's an error
       console.log('Message send operation completed (success or failure)');
@@ -649,7 +751,6 @@ class App extends Component {
 
       // Always make sure to unblock the UI even if there was an error
       this.setState({isSendingMessage: false});
-      this.addLog('UI unblocked after send error');
     }
   };
 
@@ -667,13 +768,44 @@ class App extends Component {
       // Check connection info before receiving
       const connInfo = await getConnectionInfo();
       console.log('Connection info before receiving:', connInfo);
+      this.addLog(
+        `Connection status: ${
+          connInfo?.groupFormed ? 'Connected' : 'Not connected'
+        }`,
+      );
 
-      // Verify we're connected before trying to receive
       if (!connInfo || !connInfo.groupFormed) {
         const errorMsg = 'Cannot receive messages: not connected to any device';
         this.addLog(errorMsg);
         ToastAndroid.show(errorMsg, ToastAndroid.SHORT);
         return;
+      }
+
+      // CRITICAL: Make sure we have group info before proceeding (especially for clients)
+      if (!this.state.groupInfo) {
+        this.addLog('No group info available, attempting to fetch it first...');
+        await this.getGroupInfoWithRetry();
+      }
+
+      // Double-check we have group owner address if we're a client
+      if (!connInfo.isGroupOwner && !connInfo.groupOwnerAddress) {
+        const warnMsg = 'Warning: Group owner address is missing';
+        this.addLog(warnMsg);
+        console.warn(warnMsg);
+
+        // If still no group owner address, try refreshing connection info
+        this.addLog(
+          'Trying to refresh connection info to get group owner address',
+        );
+        const refreshedConnInfo = await getConnectionInfo();
+        if (refreshedConnInfo?.groupOwnerAddress) {
+          this.addLog(
+            `Found group owner address: ${refreshedConnInfo.groupOwnerAddress}`,
+          );
+          this.setState({connectionInfo: refreshedConnInfo});
+        } else {
+          this.addLog('Still missing group owner address after refresh');
+        }
       }
 
       // Update state to indicate we're now receiving
@@ -682,6 +814,9 @@ class App extends Component {
 
       // Call the function to listen for messages
       this.listenForNextMessage();
+
+      // Show feedback to user
+      ToastAndroid.show('Actively listening for messages', ToastAndroid.SHORT);
     } catch (error) {
       this.addLog(`Error starting message receiver: ${error}`);
       console.error('Error in startReceivingMessages:', error);
@@ -698,15 +833,75 @@ class App extends Component {
       return;
     }
 
-    console.log('Listening for next message...');
+    // Get connection info for logging
+    const connRole = this.state.connectionInfo?.isGroupOwner
+      ? 'GROUP OWNER'
+      : 'CLIENT';
+    console.log(`[${connRole}] Listening for next message...`);
+    this.addLog(`[${connRole}] Listening for next message...`);
 
     // Call receiveMessage() - per documentation, this listens for ONE message
     receiveMessage()
-      .then(message => {
-        console.log('RECEIVED MESSAGE FROM PEER:', message);
+      .then(messageData => {
+        console.log(`[${connRole}] RECEIVED MESSAGE FROM PEER:`, messageData);
+        this.addLog(`[${connRole}] Received message from peer: ${messageData}`);
 
-        if (message && typeof message === 'string') {
-          this.addLog(`Received message: ${message}`);
+        if (messageData && typeof messageData === 'string') {
+          let parsedMessage;
+          let messageText;
+          let messageId;
+          let senderType = 'unknown';
+
+          // Try to parse the message as JSON first (our new format with ID)
+          try {
+            parsedMessage = JSON.parse(messageData);
+            messageText = parsedMessage.content;
+            messageId = parsedMessage.id;
+            senderType = parsedMessage.sender || 'unknown';
+
+            console.log(`[${connRole}] Parsed message:`, {
+              messageId,
+              senderType,
+              text: messageText,
+            });
+
+            // Check if this is our own message that we sent (avoid duplicates)
+            if (
+              this.sentMessageIds &&
+              this.sentMessageIds.includes(messageId)
+            ) {
+              console.log(
+                `[${connRole}] Ignoring own message with ID:`,
+                messageId,
+              );
+              this.addLog(
+                `[${connRole}] Ignored own message with ID: ${messageId}`,
+              );
+
+              // Continue listening for the next message
+              if (this.state.receivingMessages) {
+                setTimeout(() => {
+                  this.listenForNextMessage();
+                }, 300);
+              }
+              return;
+            }
+          } catch (e) {
+            // If parsing fails, it's an old-format message without ID
+            console.log(
+              `[${connRole}] Received message in legacy format or parse error:`,
+              e,
+            );
+            this.addLog(
+              `[${connRole}] Received message in legacy format or parse error: ${e}`,
+            );
+            messageText = messageData;
+            messageId = `received-${Date.now()}`;
+          }
+
+          this.addLog(
+            `[${connRole}] Received message from ${senderType}: ${messageText}`,
+          );
 
           // Add to messages list
           const timestamp = new Date().toLocaleTimeString();
@@ -714,18 +909,25 @@ class App extends Component {
             messages: [
               ...prevState.messages,
               {
-                text: message,
+                id: messageId,
+                text: messageText,
                 time: timestamp,
                 isSent: false,
+                sender: senderType,
               },
             ],
           }));
 
           // Show notification
-          ToastAndroid.show('New message received', ToastAndroid.SHORT);
+          ToastAndroid.show(`Message from ${senderType}`, ToastAndroid.SHORT);
         } else {
-          console.log('Received invalid message format:', message);
-          this.addLog(`Received invalid message format: ${typeof message}`);
+          console.log(
+            `[${connRole}] Received invalid message format:`,
+            messageData,
+          );
+          this.addLog(
+            `[${connRole}] Received invalid message format: ${typeof messageData}`,
+          );
         }
 
         // Continue listening for the next message if still in receiving mode
@@ -736,8 +938,8 @@ class App extends Component {
         }
       })
       .catch(err => {
-        console.log('Error receiving message:', err);
-        this.addLog(`Error receiving message: ${err}`);
+        console.log(`[${connRole}] Error receiving message:`, err);
+        this.addLog(`[${connRole}] Error receiving message: ${err}`);
 
         // Try again with a longer delay if we're still in receiving mode
         if (this.state.receivingMessages) {
@@ -750,34 +952,29 @@ class App extends Component {
 
   // Stop receiving messages
   stopReceivingMessages = () => {
+    if (!this.state.receivingMessages) {
+      return;
+    }
+
+    // Log the action with role info for debugging
+    const connRole = this.state.connectionInfo?.isGroupOwner
+      ? 'GROUP OWNER'
+      : 'CLIENT';
+    console.log(`[${connRole}] Stopping message receiver`);
+    this.addLog(`[${connRole}] Stopping message receiver`);
+
+    // Set flag to stop the recursive receive loop
+    this.setState({receivingMessages: false});
     try {
-      this.addLog('Stopping message receiving');
-
-      // If we're not currently receiving, just return
-      if (!this.state.receivingMessages) {
-        console.log('Not currently receiving messages, nothing to stop');
-        return;
+      // Refresh connection subscription to reset any in-progress operations
+      if (this.connectionInfoUpdatesSubscription) {
+        this.connectionInfoUpdatesSubscription.remove();
+        this.connectionInfoUpdatesSubscription =
+          subscribeOnConnectionInfoUpdates(this.handleNewInfo);
+        console.log(`[${connRole}] Reset connection subscription`);
+        this.addLog(`[${connRole}] Reset connection subscription`);
+        this.addLog('Message receiving stopped successfully');
       }
-
-      // There's no explicit method to stop a listener in the library,
-      // but we can update our state to prevent adding more messages
-      this.setState({receivingMessages: false});
-
-      // Just to be safe, unsubscribe and resubscribe to our connection info
-      // to disrupt any active listeners
-      try {
-        if (this.connectionInfoUpdatesSubscription) {
-          this.connectionInfoUpdatesSubscription.remove();
-          this.connectionInfoUpdatesSubscription =
-            subscribeOnConnectionInfoUpdates(this.handleNewInfo);
-          console.log('Reset connection info subscription');
-        }
-      } catch (subError) {
-        console.warn('Error resetting subscriptions:', subError);
-      }
-
-      console.log('Message receiving stopped');
-      this.addLog('Message receiving stopped successfully');
     } catch (error) {
       console.error('Error stopping message receiving:', error);
       this.addLog(`Error stopping message receiving: ${error}`);
