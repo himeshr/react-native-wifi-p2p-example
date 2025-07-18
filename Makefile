@@ -126,7 +126,7 @@ logs:
 	@if [ "$(PLATFORM)" = "ios" ]; then \
 		xcrun simctl spawn booted log stream --predicate 'eventMessage contains "wifip2pexample"'; \
 	else \
-		adb logcat -v time -s ReactNativeJS:* ReactNative:* wifip2pexample:*; \
+		adb logcat -v time | grep -E 'React|WiFi|wifi|p2p|WIFI|P2P'; \
 	fi
 
 clear_logs:
