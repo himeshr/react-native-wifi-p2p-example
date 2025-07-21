@@ -12,6 +12,7 @@ const MessageInput = ({
   onSendMessage,
   isConnected,
   isSendingMessage = false,
+  connectionInfo = null,
 }) => {
   const [message, setMessage] = useState('');
 
@@ -40,9 +41,28 @@ const MessageInput = ({
     }
   };
 
+  // Check if user can send messages (only clients can send)
+  const canSendMessages = isConnected && connectionInfo && connectionInfo.groupFormed && !connectionInfo.isGroupOwner;
+  const isGroupOwner = connectionInfo && connectionInfo.isGroupOwner;
+  
   return (
     <View style={styles.section}>
-      <Text style={styles.subtitle}>Send Message</Text>
+      <Text style={styles.subtitle}>
+        {isGroupOwner ? 'Message Receiver (Group Owner)' : 'Send Message (Client)'}
+      </Text>
+      
+      {isGroupOwner && (
+        <Text style={[styles.statusText, {marginBottom: 10, fontStyle: 'italic'}]}>
+          As Group Owner, you receive messages from clients. You cannot send messages.
+        </Text>
+      )}
+      
+      {!isConnected && (
+        <Text style={[styles.statusText, {marginBottom: 10, fontStyle: 'italic'}]}>
+          Connect to a device to enable messaging
+        </Text>
+      )}
+      
       <View style={styles.messageInputContainer}>
         <TextInput
           style={[
@@ -53,11 +73,15 @@ const MessageInput = ({
           value={message}
           onChangeText={setMessage}
           placeholder={
-            isSendingMessage ? 'Sending message...' : 'Type your message...'
+            isGroupOwner 
+              ? 'Group Owner receives messages only'
+              : isSendingMessage 
+                ? 'Sending message...' 
+                : 'Type your message...'
           }
-          editable={isConnected && !isSendingMessage}
+          editable={canSendMessages && !isSendingMessage}
           onSubmitEditing={() => {
-            if (isConnected && !isSendingMessage && message.trim() !== '') {
+            if (canSendMessages && !isSendingMessage && message.trim() !== '') {
               handleSend();
             }
           }}
@@ -66,11 +90,11 @@ const MessageInput = ({
           style={[
             styles.button,
             {marginLeft: 8, width: 80},
-            (!isConnected || message.trim() === '' || isSendingMessage) &&
+            (!canSendMessages || message.trim() === '' || isSendingMessage) &&
               styles.buttonDisabled,
           ]}
           onPress={handleSend}
-          disabled={!isConnected || message.trim() === '' || isSendingMessage}
+          disabled={!canSendMessages || message.trim() === '' || isSendingMessage}
           activeOpacity={0.7}>
           {isSendingMessage ? (
             <ActivityIndicator size="small" color="#FFFFFF" />

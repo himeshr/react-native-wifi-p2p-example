@@ -5457,10 +5457,10 @@ react-native-gradle-plugin@^0.70.3:
   resolved "https://registry.yarnpkg.com/react-native-gradle-plugin/-/react-native-gradle-plugin-0.70.3.tgz#cbcf0619cbfbddaa9128701aa2d7b4145f9c4fc8"
   integrity sha512-oOanj84fJEXUg9FoEAQomA8ISG+DVIrTZ3qF7m69VQUJyOGYyDZmPqKcjvRku4KXlEH6hWO9i4ACLzNBh8gC0A==
 
-react-native-wifi-p2p@3.3.0:
-  version "3.3.0"
-  resolved "https://registry.yarnpkg.com/react-native-wifi-p2p/-/react-native-wifi-p2p-3.3.0.tgz#add7c4fb868f136b26470cd8749fe0550360ce9c"
-  integrity sha512-/uqluFhgAxprAhv7hYFpjp4iMQOrxlZWGubuAosYWbAKAtm9JesP0RXBbGVO9yITBxK7UbbfrC3dOGd3g3REkg==
+react-native-wifi-p2p@3.6.0:
+  version "3.6.0"
+  resolved "https://registry.yarnpkg.com/react-native-wifi-p2p/-/react-native-wifi-p2p-3.6.0.tgz#eb0d0fbbd4e3054ef4d95c661d487abe329af677"
+  integrity sha512-gzm0defnwuiwkxaW3fppJvtZcSNSH1/mGEjwKX7g/ROniqvBzkcg9O/ulMeL+ZyFlszRV7Lg1dPkSK3OlXmvXQ==
 
 react-native@0.70.4:
   version "0.70.4"

@@ -2,11 +2,7 @@ import React from 'react';
 import {View, Text} from 'react-native';
 import {styles} from '../styles/styles';
 
-const ConnectionStatus = ({
-  isConnected,
-  connectionInfo,
-  thisDevice,
-}) => {
+const ConnectionStatus = ({isConnected, connectionInfo, thisDevice}) => {
   const isGroupOwner = connectionInfo && connectionInfo.isGroupOwner;
   const connectedDeviceName = connectionInfo && connectionInfo.deviceAddress;
 
@@ -51,16 +47,19 @@ const ConnectionStatus = ({
         </View>
       )}
 
-      {isConnected && connectionInfo && connectionInfo.groupFormed && connectionInfo.groupOwnerAddress && (
-        <View style={styles.statusRow}>
-          <Text style={styles.statusText}>
-            IP address:{' '}
-            <Text style={styles.statusHighlight}>
-              {connectionInfo.groupOwnerAddress.hostAddress || 'Unknown'}
+      {isConnected &&
+        connectionInfo &&
+        connectionInfo.groupFormed &&
+        connectionInfo.groupOwnerAddress && (
+          <View style={styles.statusRow}>
+            <Text style={styles.statusText}>
+              IP address:{' '}
+              <Text style={styles.statusHighlight}>
+                {connectionInfo.groupOwnerAddress.hostAddress || 'Unknown'}
+              </Text>
             </Text>
-          </Text>
-        </View>
-      )}
+          </View>
+        )}
     </View>
   );
 };

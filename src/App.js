@@ -27,6 +27,7 @@ import {
   removeGroup,
   getAvailablePeers,
   sendMessage,
+  sendMessageTo,
   receiveMessage,
   getConnectionInfo,
   getGroupInfo,
@@ -42,7 +43,16 @@ import MessageList from './components/MessageList';
 import FetchMessagesButton from './components/FetchMessagesButton';
 
 // Import utilities
-import {logDebug, logInfo, logError, logWarning} from './utils/logger';
+import {
+  logDebug,
+  logInfo,
+  logError,
+  logWarning,
+  logWifiStatus,
+  logWifiError,
+  logInitialization,
+  logCategorizedError,
+} from './utils/logger';
 import {styles} from './styles/styles';
 
 class App extends Component {
@@ -83,20 +93,8 @@ class App extends Component {
   componentDidMount = async () => {
     this.addLog('App starting - Initializing WiFi P2P');
 
-    try {
-      this.addLog('Initializing Wi-Fi P2P module...');
-      await initialize();
-      this.addLog('WiFi P2P initialized successfully');
-
-      // Request permissions first before setting up other WiFi P2P functionality
-      await this.requestRequiredPermissions();
-
-      // Continue with WiFi P2P initialization after permissions are granted
-      this.initializeWifiP2p();
-    } catch (error) {
-      this.addLog(`Failed to initialize WiFi P2P: ${error.message || error}`);
-      console.error('Failed to initialize WiFi P2P:', error);
-    }
+    // Initialize WiFi P2P only once
+    await this.initializeWifiP2p();
   };
 
   componentWillUnmount() {
@@ -122,30 +120,85 @@ class App extends Component {
     this.addLog('App cleanup complete');
   }
 
-  // Initialize WiFi P2P functionality
+  // Initialize WiFi P2P functionality (called only once)
   initializeWifiP2p = async () => {
     try {
-      this.addLog('Initializing Wi-Fi P2P...');
+      // Check if already initialized to prevent multiple initialization
+      if (this.state.isInitialized) {
+        const logMessage = logInitialization(
+          'Check',
+          true,
+          'Already initialized, skipping',
+        );
+        this.addLog(logMessage);
+        return;
+      }
+
+      const startLogMessage = logInitialization(
+        'Start',
+        true,
+        'Beginning WiFi P2P setup',
+      );
+      this.addLog(startLogMessage);
+
+      // Check WiFi status before initialization
+      await this.checkWifiStatus();
+
+      // Initialize WiFi P2P (only once)
       await initialize();
-      this.addLog('Wi-Fi P2P initialized successfully');
+      const initLogMessage = logInitialization(
+        'WiFi P2P Module',
+        true,
+        'Core module initialized',
+      );
+      this.addLog(initLogMessage);
 
       // Request necessary permissions for Android
       await this.requestRequiredPermissions();
+      const permLogMessage = logInitialization(
+        'Permissions',
+        true,
+        'Required permissions obtained',
+      );
+      this.addLog(permLogMessage);
 
       // Set up subscriptions
       this.setupSubscriptions();
+      const subLogMessage = logInitialization(
+        'Subscriptions',
+        true,
+        'Event listeners configured',
+      );
+      this.addLog(subLogMessage);
 
       this.setState({isInitialized: true});
 
       // After initialization, check connection info
       this.getConnectionInformation();
-    } catch (error) {
-      this.addLog(`Wi-Fi P2P initialization error: ${error}`);
-      Alert.alert(
-        'Initialization Error',
-        'Failed to initialize Wi-Fi P2P. Please ensure Wi-Fi is enabled.',
-        [{text: 'OK'}],
+
+      const completeLogMessage = logInitialization(
+        'Complete',
+        true,
+        'WiFi P2P fully initialized',
       );
+      this.addLog(completeLogMessage);
+    } catch (error) {
+      const errorLogMessage = logCategorizedError(
+        'WiFi P2P initialization failed',
+        error,
+      );
+      this.addLog(errorLogMessage);
+
+      // Check for specific WiFi errors
+      if (this.isWifiNotEnabledError(error)) {
+        this.handleWifiNotEnabledError();
+      } else {
+        Alert.alert(
+          'Initialization Error',
+          `Failed to initialize Wi-Fi P2P: ${error.message || error}`,
+          [{text: 'OK'}],
+        );
+      }
     }
   };
 
@@ -254,6 +307,240 @@ class App extends Component {
     }
   };
 
+  // Check WiFi status before initialization
+  checkWifiStatus = async () => {
+    try {
+      const checkingMessage = logWifiStatus('Checking WiFi availability...');
+      this.addLog(checkingMessage);
+
+      // On Android, we can check if WiFi is enabled
+      if (Platform.OS === 'android') {
+        // Note: This is a basic check. The actual WiFi P2P module will provide more detailed errors
+        const statusMessage = logWifiStatus('Android WiFi check completed');
+        this.addLog(statusMessage);
+      } else {
+        const statusMessage = logWifiStatus('iOS WiFi check completed');
+        this.addLog(statusMessage);
+      }
+    } catch (error) {
+      const errorMessage = logWifiError('Status Check', error);
+      this.addLog(errorMessage);
+      throw new Error(`WiFi not available: ${error.message || error}`);
+    }
+  };
+
+  // Check if error indicates WiFi is not enabled
+  isWifiNotEnabledError = error => {
+    if (!error) {
+      return false;
+    }
+
+    const errorMessage = (error.message || error.toString()).toLowerCase();
+
+    // Common WiFi not enabled error patterns
+    const wifiErrorPatterns = [
+      'wifi not enabled',
+      'wifi is not enabled',
+      'wi-fi not enabled',
+      'wi-fi is not enabled',
+      'wifi disabled',
+      'wifi is disabled',
+      'wifi p2p not supported',
+      'wifi p2p disabled',
+      'wifi adapter not found',
+      'no wifi adapter',
+      'wifi hardware not available',
+      'wifi service not available',
+    ];
+
+    const isWifiError = wifiErrorPatterns.some(pattern =>
+      errorMessage.includes(pattern),
+    );
+
+    if (isWifiError) {
+      this.addLog(`Detected WiFi not enabled error: ${errorMessage}`);
+    }
+
+    return isWifiError;
+  };
+
+  // Handle WiFi not enabled error specifically
+  handleWifiNotEnabledError = () => {
+    this.addLog('Handling WiFi not enabled error');
+
+    Alert.alert(
+      'WiFi Not Enabled',
+      'WiFi P2P requires WiFi to be enabled on your device. Please enable WiFi in your device settings and try again.',
+      [
+        {
+          text: 'Open Settings',
+          onPress: () => {
+            this.addLog('User chose to open WiFi settings');
+            // On Android, we could potentially open WiFi settings
+            if (Platform.OS === 'android') {
+              // Note: Opening settings requires additional setup
+              ToastAndroid.show(
+                'Please enable WiFi in Settings',
+                ToastAndroid.LONG,
+              );
+            }
+          },
+        },
+        {
+          text: 'Retry',
+          onPress: () => {
+            this.addLog('User chose to retry WiFi P2P initialization');
+            // Reset initialization state and try again
+            this.setState({isInitialized: false});
+            setTimeout(() => {
+              this.initializeWifiP2p();
+            }, 1000);
+          },
+        },
+        {
+          text: 'Cancel',
+          style: 'cancel',
+          onPress: () => {
+            this.addLog('User cancelled WiFi initialization');
+          },
+        },
+      ],
+    );
+  };
+
+  // Check if error is a MAC address error (common in P2P communication)
+  isMacAddressError = error => {
+    if (!error) {
+      return false;
+    }
+
+    const errorMessage = (error.message || error.toString()).toLowerCase();
+
+    // MAC address pattern: XX:XX:XX:XX:XX:XX
+    const macAddressPattern =
+      /^[0-9a-f]{2}:[0-9a-f]{2}:[0-9a-f]{2}:[0-9a-f]{2}:[0-9a-f]{2}:[0-9a-f]{2}$/i;
+
+    // Check if the error message is just a MAC address
+    const isMacError = macAddressPattern.test(errorMessage.trim());
+
+    if (isMacError) {
+      this.addLog(`Detected MAC address error: ${errorMessage}`);
+    }
+
+    return isMacError;
+  };
+
+  // Check if error is a connection-related error
+  isConnectionError = error => {
+    if (!error) {
+      return false;
+    }
+
+    const errorMessage = (error.message || error.toString()).toLowerCase();
+
+    const connectionErrorPatterns = [
+      'connection refused',
+      'connection failed',
+      'connection timeout',
+      'connection reset',
+      'no route to host',
+      'network unreachable',
+      'socket closed',
+      'socket timeout',
+      'peer disconnected',
+      'connection lost',
+      'connection aborted',
+    ];
+
+    const isConnError = connectionErrorPatterns.some(pattern =>
+      errorMessage.includes(pattern),
+    );
+
+    if (isConnError) {
+      this.addLog(`Detected connection error: ${errorMessage}`);
+    }
+
+    return isConnError;
+  };
+
+  // Handle MAC address error specifically
+  handleMacAddressError = error => {
+    const macAddress = error.message || error.toString();
+    this.addLog(`Handling MAC address error: ${macAddress}`);
+
+    Alert.alert(
+      'Device Communication Error',
+      `Failed to communicate with device ${macAddress}. This could be due to:\n\n` +
+        '• The target device is no longer in range\n' +
+        '• The WiFi P2P connection was interrupted\n' +
+        '• The target device is not ready to receive messages\n\n' +
+        'Try reconnecting to the device.',
+      [
+        {
+          text: 'Refresh Devices',
+          onPress: () => {
+            this.addLog('User chose to refresh device list');
+            this.refreshPeerList();
+          },
+        },
+        {
+          text: 'Reconnect',
+          onPress: () => {
+            this.addLog('User chose to reconnect');
+            // Disconnect and try to reconnect
+            this.disconnect().then(() => {
+              setTimeout(() => {
+                this.startDiscovery();
+              }, 1000);
+            });
+          },
+        },
+        {
+          text: 'OK',
+          style: 'cancel',
+        },
+      ],
+    );
+  };
+
+  // Handle connection error specifically
+  handleConnectionError = error => {
+    this.addLog(`Handling connection error: ${error.message || error}`);
+
+    Alert.alert(
+      'Connection Error',
+      `Network communication failed: ${error.message || error}\n\n` +
+        'This could be due to:\n' +
+        '• Poor WiFi signal strength\n' +
+        '• Network congestion\n' +
+        '• Device moved out of range\n' +
+        '• WiFi P2P connection instability',
+      [
+        {
+          text: 'Check Connection',
+          onPress: () => {
+            this.addLog('User chose to check connection');
+            this.getConnectionInformation();
+          },
+        },
+        {
+          text: 'Retry',
+          onPress: () => {
+            this.addLog('User chose to retry connection');
+            // Wait a moment then try again
+            setTimeout(() => {
+              this.getConnectionInformation();
+            }, 2000);
+          },
+        },
+        {
+          text: 'OK',
+          style: 'cancel',
+        },
+      ],
+    );
+  };
+
   // Set up event subscriptions
   setupSubscriptions = () => {
     this.addLog('Setting up P2P subscriptions...');
@@ -286,39 +573,44 @@ class App extends Component {
       // Store the updated information
       this.setState({connectionInfo: info});
 
-      // If connection was just formed, get additional group info and start message reception
+      // If connection was just formed, handle role-based setup
       if (info?.groupFormed) {
-        // CRITICAL FIX: Get group info with retries, especially important for clients
-        // where group info might not be immediately available
+        // Get group info with retries, important for both roles
         this.getGroupInfoWithRetry();
 
-        // Force restart the message receiver to ensure a clean connection
-        console.log(
-          'Connection established/updated, forcing message receiver restart',
-        );
-        this.addLog('Force-restarting message receiver');
+        // IMPORTANT: Only Group Owner should start message receiver
+        if (info.isGroupOwner) {
+          console.log('Connection established - Group Owner starting message receiver');
+          this.addLog('Group Owner: Starting message receiver');
 
-        // First stop any existing receiver
-        this.stopReceivingMessages();
+          // First stop any existing receiver
+          this.stopReceivingMessages();
 
-        // Delay starting the receiver to ensure group info is available first
-        const baseDelay = 1000; // Base delay for connection to stabilize
-        const roleDelay = info.isGroupOwner ? 500 : 2000; // Extra delay for client role
+          // Delay starting the receiver to ensure group info is available
+          const delay = 1500; // Delay for connection to stabilize
+          this.addLog(`Group Owner: Will start receiver in ${delay}ms`);
+          
+          setTimeout(() => {
+            this.startReceivingMessages();
+          }, delay);
 
-        this.addLog(
-          `Will start receiver in ${baseDelay + roleDelay}ms (${
-            info.isGroupOwner ? 'group owner' : 'client'
-          })`,
-        );
-        setTimeout(() => {
-          this.startReceivingMessages();
-        }, baseDelay + roleDelay);
-
-        // Show status
-        ToastAndroid.show(
-          'Message receiver activation scheduled',
-          ToastAndroid.SHORT,
-        );
+          ToastAndroid.show(
+            'Group Owner: Message receiver scheduled',
+            ToastAndroid.SHORT,
+          );
+        } else {
+          // Client - no message receiver, only sending capability
+          console.log('Connection established - Client ready to send messages');
+          this.addLog('Client: Ready to send messages (no receiver)');
+          
+          // Make sure no receiver is running for client
+          this.stopReceivingMessages();
+          
+          ToastAndroid.show(
+            'Client: Ready to send messages',
+            ToastAndroid.SHORT,
+          );
+        }
       }
 
       // If we've disconnected, clean up
@@ -337,34 +629,75 @@ class App extends Component {
   // Get current connection information
   getConnectionInformation = async () => {
     try {
+      this.addLog('Checking WiFi P2P connection status...');
+
       const connectionInfo = await getConnectionInfo();
+      const connectionLogMessage = logInfo(
+        `Connection status: ${
+          connectionInfo?.groupFormed ? 'Connected' : 'Disconnected'
+        }`,
+      );
+      this.addLog(connectionLogMessage);
       this.addLog(`Current connection info: ${JSON.stringify(connectionInfo)}`);
       this.setState({connectionInfo});
 
       // Get group info if available
       try {
         const groupInfo = await getGroupInfo();
+        const groupLogMessage = logInfo(
+          `Group info retrieved: ${groupInfo ? 'Available' : 'None'}`,
+        );
+        this.addLog(groupLogMessage);
         this.addLog(`Group info: ${JSON.stringify(groupInfo)}`);
         this.setState({groupInfo});
 
         // Update thisDevice with owner information if available
         if (groupInfo && groupInfo.owner) {
           this.setState({thisDevice: groupInfo.owner});
+          this.addLog(
+            `Device role: ${
+              connectionInfo?.isGroupOwner ? 'Group Owner' : 'Client'
+            }`,
+          );
         }
 
-        // If connected and not already receiving messages, start receiving
+        // IMPORTANT: Only Group Owner should receive messages, Client should only send
         if (
           connectionInfo &&
           connectionInfo.groupFormed &&
+          connectionInfo.isGroupOwner &&
           !this.state.receivingMessages
         ) {
+          this.addLog('Connection established - starting message receiver (Group Owner only)');
           this.startReceivingMessages();
+        } else if (connectionInfo && connectionInfo.groupFormed && !connectionInfo.isGroupOwner) {
+          this.addLog('Connected as Client - ready to send messages (not receiving)');
         }
       } catch (groupError) {
-        this.addLog(`Could not get group info: ${groupError}`);
+        const groupErrorMessage = logCategorizedError(
+          'Group info retrieval failed',
+          groupError,
+        );
+        this.addLog(groupErrorMessage);
+
+        // Check if this is a WiFi-related error
+        if (this.isWifiNotEnabledError(groupError)) {
+          this.handleWifiNotEnabledError();
+        }
       }
     } catch (error) {
-      this.addLog(`Error getting connection info: ${error}`);
+      const errorMessage = logCategorizedError(
+        'Connection info retrieval failed',
+        error,
+      );
+      this.addLog(errorMessage);
+
+      // Check for specific error types
+      if (this.isWifiNotEnabledError(error)) {
+        this.handleWifiNotEnabledError();
+      } else if (this.isConnectionError(error)) {
+        this.handleConnectionError(error);
+      }
     }
   };
 
@@ -398,8 +731,19 @@ class App extends Component {
         this.refreshPeerList();
       }, 2000);
     } catch (error) {
-      this.addLog(`Peer discovery failed: ${error}`);
-      ToastAndroid.show('Failed to start discovery', ToastAndroid.SHORT);
+      this.addLog(`Peer discovery failed: ${error.message || error}`);
+
+      // Check if this is a WiFi-related error
+      if (this.isWifiNotEnabledError(error)) {
+        this.handleWifiNotEnabledError();
+      } else {
+        ToastAndroid.show('Failed to start discovery', ToastAndroid.SHORT);
+        Alert.alert(
+          'Discovery Error',
+          `Failed to start peer discovery: ${error.message || error}`,
+          [{text: 'OK'}],
+        );
+      }
     }
   };
 
@@ -663,7 +1007,7 @@ class App extends Component {
   // Send a message to the connected peer
   sendMessageToPeer = async message => {
     // Get current connection info from state
-    const {connectionInfo} = this.state;
+    const {connectionInfo, selectedDevice} = this.state;
 
     // Check if we're connected to a group
     if (!connectionInfo || !connectionInfo.groupFormed) {
@@ -713,37 +1057,69 @@ class App extends Component {
         `Role: ${connectionInfo.isGroupOwner ? 'Group Owner' : 'Client'}`,
       );
 
-      // Important: According to the library docs, if we're a group owner we need to make sure
-      // our client is ready to receive before sending. We should already have set up
-      // our receiver at connection time, but let's make sure it's set up here as well.
+      // CRITICAL: According to WiFi P2P documentation:
+      // - Only CLIENT should send messages using sendMessage()
+      // - Only GROUP OWNER should receive messages using receiveMessage()
+      // - You cannot be both sender and receiver simultaneously
+      
       if (connectionInfo.isGroupOwner) {
-        // If group owner sending, make sure receiver is ready on our side first
-        this.addLog('Group owner sending - ensuring receiver is ready');
-        if (!this.state.receivingMessages) {
-          // Make sure we're ready to receive replies
-          await this.startReceivingMessages();
-        }
+        // Group Owner should NOT send messages in normal client-server pattern
+        // Group Owner is the server that receives messages from clients
+        const errorMsg = 'Group Owner cannot send messages. Only clients can send to the group owner.';
+        this.addLog(errorMsg);
+        ToastAndroid.show(errorMsg, ToastAndroid.LONG);
+        
+        Alert.alert(
+          'Invalid Operation',
+          'As the Group Owner (server), you can only receive messages from clients. ' +
+          'To send messages, you need to be a client connecting to another group owner.',
+          [{text: 'OK'}]
+        );
+        return;
       } else {
-        // If client sending, add a slight delay to let owner's receiver be ready
-        this.addLog('Client sending - adding delay for owner to be ready');
-        await new Promise(resolve => setTimeout(resolve, 300));
+        // Client sending to Group Owner (server)
+        this.addLog('Client sending message to Group Owner...');
+        
+        // Add a slight delay to ensure group owner's receiver is ready
+        await new Promise(resolve => setTimeout(resolve, 500));
+        
+        // Send the message using sendMessage() (client to server)
+        this.addLog('Executing sendMessage (client to server)');
+        const metaInfo = await sendMessage(messageWithId);
+        console.log('Message sent successfully', metaInfo);
+        this.addLog(`Send operation successful: ${JSON.stringify(metaInfo)}`);
       }
-
-      // Send the message
-      this.addLog('Executing sendMessage');
-      const metaInfo = await sendMessage(messageWithId);
-      console.log('Message sent successfully', metaInfo);
-      this.addLog(`Send operation successful: ${JSON.stringify(metaInfo)}`);
 
       console.log('sendMessage call completed successfully');
       this.addLog('Network send operation completed');
       ToastAndroid.show('Message sent', ToastAndroid.SHORT);
     } catch (error) {
-      const errorMsg = `Failed to send message: ${error.message || error}`;
+      // Enhanced error logging and categorization
+      const errorLogMessage = logCategorizedError('Message send failed', error);
+      this.addLog(errorLogMessage);
+
       console.error('Error in sendMessageToPeer:', error);
       console.log('Error details:', JSON.stringify(error));
-      this.addLog(errorMsg);
-      ToastAndroid.show(errorMsg, ToastAndroid.LONG);
+
+      // Check for specific error types
+      if (this.isMacAddressError(error)) {
+        this.handleMacAddressError(error);
+      } else if (this.isConnectionError(error)) {
+        this.handleConnectionError(error);
+      } else if (this.isWifiNotEnabledError(error)) {
+        this.handleWifiNotEnabledError();
+      } else {
+        // Generic error handling
+        const errorMsg = `Failed to send message: ${error.message || error}`;
+        this.addLog(errorMsg);
+        ToastAndroid.show(errorMsg, ToastAndroid.LONG);
+
+        Alert.alert(
+          'Message Send Error',
+          `Could not send message: ${error.message || error}`,
+          [{text: 'OK'}],
+        );
+      }
     } finally {
       // Ensure UI is always unblocked even if there's an error
       console.log('Message send operation completed (success or failure)');
@@ -762,9 +1138,6 @@ class App extends Component {
         return;
       }
 
-      this.addLog('Starting to receive messages...');
-      console.log('Setting up message receiver...');
-
       // Check connection info before receiving
       const connInfo = await getConnectionInfo();
       console.log('Connection info before receiving:', connInfo);
@@ -780,6 +1153,17 @@ class App extends Component {
         ToastAndroid.show(errorMsg, ToastAndroid.SHORT);
         return;
       }
+      
+      // CRITICAL: Only Group Owner should receive messages
+      if (!connInfo.isGroupOwner) {
+        const errorMsg = 'Only Group Owner can receive messages. Clients should only send.';
+        this.addLog(errorMsg);
+        ToastAndroid.show(errorMsg, ToastAndroid.SHORT);
+        return;
+      }
+      
+      this.addLog('Starting to receive messages (Group Owner only)...');
+      console.log('Setting up message receiver for Group Owner...');
 
       // CRITICAL: Make sure we have group info before proceeding (especially for clients)
       if (!this.state.groupInfo) {
@@ -1074,6 +1458,7 @@ class App extends Component {
                 onSendMessage={this.sendMessageToPeer}
                 isConnected={isConnected}
                 isSendingMessage={this.state.isSendingMessage}
+                connectionInfo={this.state.connectionInfo}
               />
               <FetchMessagesButton
                 onFetchMessages={this.fetchMessages}
